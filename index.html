@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CSV ML Compare</title>
+<meta name="description" content="CSVを入れて、モデルを選ぶだけで機械学習を比較できるブラウザアプリ。データは外に送られません。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-in">
+    <div>
+      <h1>CSV ML Compare</h1>
+      <p class="lede">CSVを入れて、予測したい列とモデルを選ぶだけ。複数のモデルを同じ条件で学習させて比べます。</p>
+    </div>
+    <div class="engine" id="engine" role="status" aria-live="polite">
+      <span class="dot" id="engineDot"></span><span id="engineText">準備中…</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <p class="privacy">計算はすべてこのブラウザの中で行います。CSVがどこかに送られることはありません。</p>
+
+  <!-- 1. データ -->
+  <section class="card" id="stepData">
+    <h2><span class="num">1</span>データを選ぶ</h2>
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept=".csv,.tsv,.txt,text/csv">
+      <span class="drop-main">CSVファイルをここにドロップ、またはクリックして選ぶ</span>
+      <span class="drop-sub">1行目は列名にしてください。区切りはカンマ・タブ・セミコロンに対応。</span>
+    </label>
+    <div class="row-btns">
+      <button type="button" class="btn ghost" id="sampleBtn">サンプルデータで試す</button>
+      <span class="hint">（合成データ：顧客600人の解約・支出）</span>
+    </div>
+    <div id="dataInfo" hidden>
+      <p class="meta" id="dataMeta"></p>
+      <div class="scroll"><table class="preview" id="previewTable"></table></div>
+    </div>
+  </section>
+
+  <!-- 2. 設定 -->
+  <section class="card" id="stepSetup" hidden>
+    <h2><span class="num">2</span>何を予測するか、どのモデルで</h2>
+    <div class="grid2">
+      <div class="field">
+        <label for="target">予測したい列</label>
+        <select id="target"></select>
+      </div>
+      <div class="field">
+        <label for="task">問題の種類</label>
+        <select id="task">
+          <option value="auto">自動で判定</option>
+          <option value="classification">分類（カテゴリを当てる）</option>
+          <option value="regression">回帰（数値を当てる）</option>
+        </select>
+        <p class="hint" id="taskHint"></p>
+      </div>
+    </div>
+
+    <fieldset class="field">
+      <legend>説明に使う列 <button type="button" class="link" id="featAll">すべて選ぶ</button> <button type="button" class="link" id="featNone">すべて外す</button></legend>
+      <div class="checks" id="features"></div>
+      <p class="hint">「IDっぽい列」「値が1種類の列」は最初から外してあります。予測したい列と同じ意味の列（答えそのもの）が入っていないか確認してください。</p>
+    </fieldset>
+
+    <fieldset class="field">
+      <legend>モデル（複数選べます）</legend>
+      <div class="checks" id="models"></div>
+      <p class="hint">比べる基準として「ベースライン」（何も学習しない当て方）を必ず一緒に出します。</p>
+    </fieldset>
+
+    <div class="grid3">
+      <div class="field">
+        <label for="testSize">テストに回す割合 <output id="testSizeOut">25%</output></label>
+        <input type="range" id="testSize" min="10" max="50" step="5" value="25">
+      </div>
+      <div class="field">
+        <label for="cv">交差検証</label>
+        <select id="cv">
+          <option value="0">しない</option>
+          <option value="3">3分割</option>
+          <option value="5" selected>5分割</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="seed">乱数シード</label>
+        <input type="number" id="seed" value="42" min="0" step="1">
+      </div>
+    </div>
+
+    <div class="run-row">
+      <button type="button" class="btn primary" id="runBtn" disabled>学習して比べる</button>
+      <span class="hint" id="runStatus" role="status" aria-live="polite"></span>
+    </div>
+  </section>
+
+  <!-- 3. 結果 -->
+  <section class="card" id="stepResult" hidden>
+    <h2><span class="num">3</span>結果</h2>
+    <p class="meta" id="resMeta"></p>
+    <ul class="notes" id="resNotes"></ul>
+
+    <h3>モデルごとの成績</h3>
+    <p class="hint" id="metricHint"></p>
+    <div class="scroll"><table class="metrics" id="metricsTable"></table></div>
+    <div class="chart-box"><canvas id="scoreChart" aria-label="モデルごとの成績の棒グラフ" role="img"></canvas></div>
+
+    <div class="grid2 top-gap">
+      <div>
+        <h3>効いている列（並べ替え重要度）</h3>
+        <div class="field inline">
+          <label for="impModel">モデル</label>
+          <select id="impModel"></select>
+        </div>
+        <p class="hint">その列の値をばらばらに並べ替えたとき、テストの成績がどれだけ落ちるか。大きいほど予測に効いています。</p>
+        <div class="chart-box tall"><canvas id="impChart" aria-label="列の重要度の棒グラフ" role="img"></canvas></div>
+      </div>
+      <div id="confBox">
+        <h3>当たり外れの表（混同行列）</h3>
+        <div class="field inline">
+          <label for="confModel">モデル</label>
+          <select id="confModel"></select>
+        </div>
+        <p class="hint">行が正解、列が予測。対角線上が当たり。</p>
+        <div class="scroll"><table class="confusion" id="confTable"></table></div>
+      </div>
+    </div>
+
+    <h3 class="top-gap">予測結果の一覧（テスト用の行）</h3>
+    <div class="row-btns">
+      <button type="button" class="btn ghost" id="dlBtn">予測結果をCSVでダウンロード</button>
+      <span class="hint" id="predHint"></span>
+    </div>
+    <div class="scroll tall-scroll"><table class="preds" id="predTable"></table></div>
+  </section>
+</main>
+
+<footer class="wrap foot">
+  <p>scikit-learn と Pyodide で動いています。結果は1回の分割での成績です。大事な判断に使うときは交差検証の値も見てください。</p>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
