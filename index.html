@@ -7,7 +7,7 @@
 <meta name="description" content="CSVを入れて、モデルを選ぶだけで機械学習を比較できるブラウザアプリ。データは外に送られません。">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 <header class="top">
@@ -97,6 +97,7 @@
       <button type="button" class="btn primary" id="runBtn" disabled>学習して比べる</button>
       <span class="hint" id="runStatus" role="status" aria-live="polite"></span>
     </div>
+    <div class="err" id="runError" role="alert" hidden></div>
   </section>
 
   <!-- 3. 結果 -->
@@ -145,6 +146,6 @@
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

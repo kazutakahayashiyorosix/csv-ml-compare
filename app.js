@@ -15,26 +15,54 @@
   };
 
   // ---------------------------------------------------------------- worker
-  const worker = new Worker("worker.js");
-  let catalogue = null, seq = 0;
+  // 計算エンジンが落ちたら（メモリ不足など）自動で作り直す。待っている処理は失敗として返す。
+  let worker = null, catalogue = null, seq = 0, lastText = null, lastName = null;
   const pending = new Map();
+  function startWorker() {
+    catalogue = null;
+    worker = new Worker("worker.js?v=" + APP_VERSION);
+    worker.onmessage = (ev) => {
+      const m = ev.data;
+      if (m.type === "status") return setEngine(m.text, "");
+      if (m.type === "progress") return setRunStatus(m.text, true);
+      if (m.type === "ready") {
+        catalogue = m.catalogue; setEngine("準備完了", "ok");
+        if (lastText && !info) reloadAfterRestart(); else { refreshModels(); updateRunBtn(); }
+        return;
+      }
+      if (m.type === "fatal") { setEngine("計算エンジンの起動に失敗：" + m.text, "ng"); showRetry(); return; }
+      const p = pending.get(m.id); if (!p) return; pending.delete(m.id);
+      if (m.ok) p.res(m.data); else { const e = new Error(m.error); e.detail = m.detail; p.rej(e); }
+    };
+    worker.onerror = (e) => { e.preventDefault && e.preventDefault(); crashed(e.message); };
+  }
+  function crashed(msg) {
+    const err = new Error("計算エンジンが止まりました（メモリ不足の可能性）。行や列を減らすか、重いモデル・交差検証を外して、もう一度試してください。");
+    err.detail = msg || "";
+    for (const p of pending.values()) p.rej(err);
+    pending.clear();
+    try { worker.terminate(); } catch (_) {}
+    setEngine("再起動中…", "");
+    info = null;
+    startWorker();
+  }
   const call = (cmd, args) => new Promise((res, rej) => {
+    if (!worker) return rej(new Error("計算エンジンがありません"));
     const id = ++seq; pending.set(id, { res, rej }); worker.postMessage({ id, cmd, args });
   });
-  worker.onmessage = (ev) => {
-    const m = ev.data;
-    if (m.type === "status") return setEngine(m.text, "");
-    if (m.type === "ready") { catalogue = m.catalogue; setEngine("準備完了", "ok"); refreshModels(); updateRunBtn(); return; }
-    if (m.type === "fatal") return setEngine("読み込みに失敗しました：" + m.text, "ng");
-    const p = pending.get(m.id); if (!p) return; pending.delete(m.id);
-    m.ok ? p.res(m.data) : p.rej(new Error(m.error));
-  };
-  worker.onerror = (e) => setEngine("エラー：" + (e.message || "計算エンジンを起動できません"), "ng");
+  async function reloadAfterRestart() {
+    try { info = await call("load", { text: lastText }); refreshModels(); updateRunBtn(); } catch (_) {}
+  }
+  function showRetry() {
+    const b = el("button", { type: "button", class: "link", text: "再読み込み", onclick: () => location.reload() });
+    $("engineText").append(" ", b);
+  }
   function setEngine(text, cls) { $("engineText").textContent = text; $("engineDot").className = "dot " + cls; }
+  const APP_VERSION = "2";
 
   // ---------------------------------------------------------------- state
-  let info = null, result = null, charts = {};
-  const DEFAULT_MODELS = ["logreg", "linear", "rf", "hgb"];
+  let info = null, result = null, charts = {}, running = false;
+  const DEFAULT_MODELS = ["logreg", "linear", "rf", "lgbm"];
   const KIND_TAG = { id_like: "IDっぽい", constant: "値が1種類", empty: "空" };
 
   // ---------------------------------------------------------------- 1. data
@@ -42,24 +70,33 @@
   ["dragover", "dragenter"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, () => drop.classList.remove("over")));
   drop.addEventListener("drop", (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) readFile(f); });
-  $("file").addEventListener("change", (e) => { const f = e.target.files[0]; if (f) readFile(f); });
+  $("file").addEventListener("change", (e) => { const f = e.target.files[0]; if (f) readFile(f); e.target.value = ""; });
   $("sampleBtn").addEventListener("click", async () => {
-    const t = await (await fetch("sample/sample_customers.csv")).text();
-    loadText(t, "sample_customers.csv（合成データ）", "churned");
+    try {
+      const res = await fetch("sample/sample_customers.csv");
+      if (!res.ok) throw new Error(res.status);
+      loadText(await res.text(), "sample_customers.csv（合成データ）", "churned");
+    } catch (e) { alertNote("サンプルを読み込めませんでした（" + e.message + "）"); }
   });
 
-  function readFile(f) {
+  // Excel で保存した日本語CSV（Shift_JIS）にも対応：UTF-8 で読めなければ Shift_JIS で読む
+  async function readFile(f) {
     if (f.size > 50 * 1024 * 1024) { alertNote("50MBを超えるファイルはブラウザでは重すぎます。行を減らしてから試してください。"); return; }
-    const r = new FileReader();
-    r.onload = () => loadText(String(r.result), f.name, null);
-    r.readAsText(f, "UTF-8");
+    let text;
+    try {
+      const buf = await f.arrayBuffer();
+      try { text = new TextDecoder("utf-8", { fatal: true }).decode(buf); }
+      catch (_) { text = new TextDecoder("shift_jis").decode(buf); }
+    } catch (e) { alertNote("ファイルを読めませんでした：" + e.message); return; }
+    loadText(text, f.name, null);
   }
 
   async function loadText(text, name, preferTarget) {
-    $("dataMeta").textContent = "読み込み中…";
+    $("dataMeta").textContent = catalogue ? "読み込み中…" : "計算エンジンの準備ができたら読み込みます…";
     $("dataInfo").hidden = false;
     try {
       info = await call("load", { text });
+      lastText = text; lastName = name;
     } catch (e) {
       $("dataMeta").textContent = "読み込めませんでした：" + e.message; return;
     }
@@ -120,17 +157,27 @@
     const m = $("models"); m.replaceChildren();
     for (const x of list) {
       if (x.id === "baseline") continue;
-      const on = keep.size ? keep.has(x.id) : DEFAULT_MODELS.includes(x.id);
-      m.append(el("label", { class: "chk" }, el("input", { type: "checkbox", value: x.id, checked: on, onchange: updateRunBtn }), x.name));
+      const on = x.available && (keep.size ? keep.has(x.id) : DEFAULT_MODELS.includes(x.id));
+      m.append(el("label", { class: "chk" + (x.available ? "" : " off"), title: x.available ? "" : "ブラウザ版では使えません（手元の Python で動かすと使えます）" },
+        el("input", { type: "checkbox", value: x.id, checked: on, disabled: !x.available, onchange: updateRunBtn }), x.name,
+        x.available ? null : el("span", { class: "tag", text: "ブラウザ版では不可" })));
     }
     updateRunBtn();
   }
   $("testSize").addEventListener("input", (e) => ($("testSizeOut").textContent = e.target.value + "%"));
 
   function updateRunBtn() {
-    const ok = catalogue && info && box("features").some((i) => i.checked) && box("models").some((i) => i.checked);
+    const ok = !running && catalogue && info && box("features").some((i) => i.checked) && box("models").some((i) => i.checked && !i.disabled);
     $("runBtn").disabled = !ok;
-    $("runStatus").textContent = !catalogue ? "計算エンジンの準備を待っています…" : "";
+    if (!catalogue && !running) setRunStatus("計算エンジンの準備を待っています…");
+  }
+  function setRunStatus(text, spin) {
+    $("runStatus").replaceChildren(...(spin ? [el("span", { class: "spin", "aria-hidden": "true" })] : []), text);
+  }
+  function showError(e) {
+    const box = $("runError"); box.replaceChildren(el("strong", { text: "エラー：" }), e.message);
+    if (e.detail) box.append(el("details", {}, el("summary", { text: "詳しい内容（スクショを送るときはここも開いて）" }), el("pre", { text: e.detail })));
+    box.hidden = false;
   }
 
   $("runBtn").addEventListener("click", async () => {
@@ -143,16 +190,19 @@
       seed: Math.max(0, parseInt($("seed").value, 10) || 0),
       cv_folds: Number($("cv").value),
     };
-    $("runBtn").disabled = true;
-    $("runStatus").replaceChildren(el("span", { class: "spin", "aria-hidden": "true" }), `学習中…（${args.models.length + 1} モデル${args.cv_folds ? `、${args.cv_folds}分割の交差検証つき` : ""}）`);
+    if (running) return;
+    running = true; updateRunBtn(); $("runError").hidden = true;
+    setRunStatus(`学習中…（${args.models.length + 1} モデル${args.cv_folds ? `、${args.cv_folds}分割の交差検証つき` : ""}）`, true);
     const t0 = performance.now();
+    let msg = "";
     try {
       result = await call("run", args);
-      $("runStatus").textContent = `完了（${((performance.now() - t0) / 1000).toFixed(1)} 秒）`;
-      renderResult();
+      msg = `完了（${((performance.now() - t0) / 1000).toFixed(1)} 秒）`;
+      try { renderResult(); } catch (e) { e.detail = e.stack; showError(new Error("結果の表示に失敗しました：" + e.message)); }
     } catch (e) {
-      $("runStatus").textContent = "エラー：" + e.message;
-    } finally { updateRunBtn(); }
+      msg = "うまくいきませんでした";
+      showError(e);
+    } finally { running = false; updateRunBtn(); setRunStatus(msg); }
   });
 
   // ---------------------------------------------------------------- 3. result
@@ -273,4 +323,5 @@
 
   const fmt = (v) => (v == null ? "—" : typeof v === "number" ? (Math.abs(v) >= 1000 ? v.toLocaleString() : v.toFixed(3)) : v);
   function alertNote(t) { $("dataInfo").hidden = false; $("dataMeta").textContent = t; }
+  startWorker();
 })();

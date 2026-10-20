@@ -77,3 +77,8 @@ input[type=range]{accent-color:var(--accent);min-height:44px}
 @keyframes sp{to{transform:rotate(360deg)}}
 @media (max-width:600px){h1{font-size:22px}.card{padding:16px}}
 .tall-scroll{max-height:420px;overflow:auto}
+.chk.off{opacity:.55;cursor:not-allowed}
+.err{margin-top:12px;background:#fdecea;color:#7a1712;border-radius:10px;padding:10px 14px;font-size:14px}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .err{background:#3a1715;color:#ffb4ab}}
+.err details{margin-top:6px}.err summary{cursor:pointer;font-size:13px}
+.err pre{white-space:pre-wrap;word-break:break-all;font-family:var(--mono);font-size:12px;max-height:240px;overflow:auto;margin:6px 0 0}
